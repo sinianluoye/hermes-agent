@@ -890,6 +890,59 @@ def profile_env(tmp_path, monkeypatch):
 
 ---
 
+## Code Quality Checks (Ruff + Pylint)
+
+The project runs two Python linters:
+
+- **Ruff** — fast checks for style, imports, bugbear, pyupgrade, simplify,
+  return, comprehensions, and the pylint error/warning subset (`PLE`/`PLW`,
+  including the load-bearing `PLW1514`). Configured under
+  `[tool.ruff.lint]` in `pyproject.toml`.
+- **Pylint** — deeper semantic checks (protected-access leaks, design
+  smells, dead code, suspicious patterns) that ruff does not cover.
+  Configured under `[tool.pylint.*]` in `pyproject.toml`.
+
+Both tools are installed by the `dev` extra:
+
+```bash
+pip install -e '.[dev]'
+ruff check .
+pylint $(git ls-files '*.py')
+```
+
+### Development Requirements
+
+1. **All newly added or refactored code MUST pass both `ruff check` and
+   `pylint`.** CI enforces this **at line granularity** (see
+   `scripts/lint_changed_lines.py`): only diagnostics on lines you
+   actually added/modified in the PR fail the build. Touching a single
+   line in a legacy file does NOT force you to clean up the rest of
+   that file.
+
+2. **Existing code is grandfathered.** The codebase predates these checks
+   and carries historical baggage that is not worth a flag-day cleanup.
+   Pre-existing violations may stay as-is until the surrounding code is
+   refactored. Do not gratuitously "fix" unrelated lint hits in a feature
+   PR — that pollutes the diff and risks regressions.
+
+3. **Disabling rules is a last resort.** Per-line disables
+   (`# noqa: <code>` for ruff, `# pylint: disable=<name>` for pylint) are
+   only allowed when there is **no other way** to satisfy the rule —
+   e.g. a third-party API genuinely requires the pattern, or the
+   "fix" would be objectively worse than the violation.
+   - **Never** add file-level or project-level disables for new code.
+   - **Never** extend the `ignore` list in `pyproject.toml` to silence a
+     rule on freshly written code; fix the code instead.
+   - When you must disable, leave a one-line comment explaining *why* the
+     rule cannot be satisfied here. Reviewers should reject disables
+     without that justification.
+
+4. **Reviewer checklist.** When reviewing a PR, run `ruff check` and
+   `pylint` on the changed files; reject new violations and unjustified
+   `# noqa` / `# pylint: disable` comments.
+
+---
+
 ## Testing
 
 **ALWAYS use `scripts/run_tests.sh`** — do not call `pytest` directly. The script enforces

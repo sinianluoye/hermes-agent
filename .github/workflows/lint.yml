@@ -155,18 +155,20 @@ jobs:
 
 
   ruff-blocking:
-    # Enforce the rules in pyproject.toml [tool.ruff.lint.select]. Currently
-    # PLW1514 (unspecified-encoding) — catches bare ``open()`` /
-    # ``read_text()`` / ``write_text()`` calls that default to locale
-    # encoding on Windows. Failure here blocks merge; the advisory
-    # ``lint-diff`` job above runs independently so reviewers still get
-    # the diff comment even when enforcement fails.
-    name: ruff enforcement (blocking)
+    # Enforce the ruff rules in pyproject.toml [tool.ruff.lint.select] on
+    # files changed in the PR (or the latest push to main).  Existing code
+    # is grandfathered — see AGENTS.md "Code Quality Checks" — so we
+    # intentionally do NOT run ``ruff check .`` here.  Failure blocks
+    # merge; the advisory ``lint-diff`` job above runs independently so
+    # reviewers still get the diff comment even when enforcement fails.
+    name: ruff enforcement (blocking, PR diff)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0  # need history for merge-base
 
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
@@ -174,11 +176,102 @@ jobs:
       - name: Install ruff
         run: uv tool install ruff
 
-      - name: ruff check .
-        # No --exit-zero, no || true. Exit code propagates to the job,
-        # which propagates to the required-check gate.
+      - name: Determine base ref
+        id: base
         run: |
-          ruff check .
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          else
+            BASE_SHA=$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)
+          fi
+          echo "sha=${BASE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Base SHA: ${BASE_SHA}"
+
+      - name: Collect changed Python files
+        id: changed
+        run: |
+          # Added/Copied/Modified/Renamed — skip Deleted.  NUL-delimited to
+          # tolerate spaces/unicode in paths.
+          git diff -z --name-only --diff-filter=ACMR \
+              "${{ steps.base.outputs.sha }}" HEAD -- '*.py' \
+            > .changed-py.nul || true
+          if [ ! -s .changed-py.nul ]; then
+            echo "count=0" >> "$GITHUB_OUTPUT"
+            echo "No Python files changed; skipping ruff."
+          else
+            COUNT=$(tr -cd '\0' < .changed-py.nul | wc -c)
+            echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
+            echo "Changed Python files: ${COUNT}"
+            xargs -0 -n1 echo < .changed-py.nul
+          fi
+
+      - name: ruff check (changed lines only)
+        if: steps.changed.outputs.count != '0'
+        # Line-level filter: only diagnostics on lines added/modified vs the
+        # base SHA fail the job.  Touching one line in a legacy file does
+        # NOT make every pre-existing violation in that file fail CI — see
+        # AGENTS.md "Code Quality Checks".
+        run: python scripts/lint_changed_lines.py --tool ruff --base "${{ steps.base.outputs.sha }}"
+
+  pylint-blocking:
+    # Enforce pylint on files changed in the PR.  Existing code is
+    # grandfathered — see AGENTS.md "Code Quality Checks".  Pylint is
+    # configured under [tool.pylint.*] in pyproject.toml.
+    name: pylint enforcement (blocking, PR diff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0  # need history for merge-base
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pylint
+        # Install pylint only — running ``pip install -e .[dev]`` would pull
+        # in the entire dependency tree just to run a linter.  Pylint will
+        # emit ``import-error`` for unresolved imports; we disable that
+        # message at invocation time so we don't have to install every
+        # transitive dep just for lint.
+        run: pip install 'pylint>=3.0,<4'
+
+      - name: Determine base ref
+        id: base
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          else
+            BASE_SHA=$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)
+          fi
+          echo "sha=${BASE_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Collect changed Python files
+        id: changed
+        run: |
+          git diff -z --name-only --diff-filter=ACMR \
+              "${{ steps.base.outputs.sha }}" HEAD -- '*.py' \
+            > .changed-py.nul || true
+          if [ ! -s .changed-py.nul ]; then
+            echo "count=0" >> "$GITHUB_OUTPUT"
+            echo "No Python files changed; skipping pylint."
+          else
+            COUNT=$(tr -cd '\0' < .changed-py.nul | wc -c)
+            echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
+            echo "Changed Python files: ${COUNT}"
+            xargs -0 -n1 echo < .changed-py.nul
+          fi
+
+      - name: pylint (changed lines only)
+        if: steps.changed.outputs.count != '0'
+        # ``import-error`` / ``no-name-in-module`` disabled inside the helper
+        # because we don't install runtime deps in this job.  Line-level
+        # filter — only diagnostics on lines added/modified vs the base
+        # SHA fail the job.  See AGENTS.md "Code Quality Checks".
+        run: python scripts/lint_changed_lines.py --tool pylint --base "${{ steps.base.outputs.sha }}"
 
   windows-footguns:
     # Static guardrails on Windows-unsafe Python primitives — os.kill(pid, 0),
