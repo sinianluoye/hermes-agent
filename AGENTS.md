@@ -913,10 +913,11 @@ pylint $(git ls-files '*.py')
 ### Development Requirements
 
 1. **All newly added or refactored code MUST pass both `ruff check` and
-   `pylint`.** A change is "refactored" when you meaningfully rewrite a
-   function/class/file — drive-by edits to a legacy file do not require
-   you to clean up the rest of the file, but the lines you change must be
-   clean.
+   `pylint`.** CI enforces this **at line granularity** (see
+   `scripts/lint_changed_lines.py`): only diagnostics on lines you
+   actually added/modified in the PR fail the build. Touching a single
+   line in a legacy file does NOT force you to clean up the rest of
+   that file.
 
 2. **Existing code is grandfathered.** The codebase predates these checks
    and carries historical baggage that is not worth a flag-day cleanup.

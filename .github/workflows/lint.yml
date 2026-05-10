@@ -205,12 +205,13 @@ jobs:
             xargs -0 -n1 echo < .changed-py.nul
           fi
 
-      - name: ruff check (changed files only)
+      - name: ruff check (changed lines only)
         if: steps.changed.outputs.count != '0'
-        # No --exit-zero, no || true. Exit code propagates to the job,
-        # which propagates to the required-check gate.  Existing files
-        # not in the diff are not checked — see AGENTS.md.
-        run: xargs -0 -r ruff check -- < .changed-py.nul
+        # Line-level filter: only diagnostics on lines added/modified vs the
+        # base SHA fail the job.  Touching one line in a legacy file does
+        # NOT make every pre-existing violation in that file fail CI — see
+        # AGENTS.md "Code Quality Checks".
+        run: python scripts/lint_changed_lines.py --tool ruff --base "${{ steps.base.outputs.sha }}"
 
   pylint-blocking:
     # Enforce pylint on files changed in the PR.  Existing code is
@@ -264,15 +265,13 @@ jobs:
             xargs -0 -n1 echo < .changed-py.nul
           fi
 
-      - name: pylint (changed files only)
+      - name: pylint (changed lines only)
         if: steps.changed.outputs.count != '0'
-        # ``import-error`` / ``no-name-in-module`` disabled because we don't
-        # install runtime deps in this job.  All other rules in
-        # [tool.pylint.*] still apply.
-        run: |
-          xargs -0 -r pylint \
-            --disable=import-error,no-name-in-module \
-            -- < .changed-py.nul
+        # ``import-error`` / ``no-name-in-module`` disabled inside the helper
+        # because we don't install runtime deps in this job.  Line-level
+        # filter — only diagnostics on lines added/modified vs the base
+        # SHA fail the job.  See AGENTS.md "Code Quality Checks".
+        run: python scripts/lint_changed_lines.py --tool pylint --base "${{ steps.base.outputs.sha }}"
 
   windows-footguns:
     # Static guardrails on Windows-unsafe Python primitives — os.kill(pid, 0),
