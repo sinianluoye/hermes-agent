@@ -175,6 +175,19 @@ def _check_via_local_git(repo_dir: Path) -> Optional[int]:
     return None
 
 
+def _update_check_enabled() -> bool:
+    """Honor ``update_check.enabled: false`` in ~/.hermes/config.yaml.
+
+    Defaults to True. Uses ``read_raw_config`` to avoid the deep-merge /
+    migration overhead of ``load_config`` on every banner render.
+    """
+    try:
+        from hermes_cli.config import read_raw_config, cfg_get
+        return cfg_get(read_raw_config(), "update_check", "enabled", default=True) is not False
+    except Exception:
+        return True
+
+
 def check_for_updates() -> Optional[int]:
     """Check whether a Hermes update is available.
 
@@ -185,7 +198,13 @@ def check_for_updates() -> Optional[int]:
     Returns the number of commits behind, ``UPDATE_AVAILABLE_NO_COUNT`` (-1)
     if behind but the count is unknown, ``0`` if up-to-date, or ``None`` if
     the check failed or doesn't apply. Cached for 6 hours.
+
+    Skipped entirely when ``update_check.enabled: false`` is set in
+    ``~/.hermes/config.yaml``.
     """
+    if not _update_check_enabled():
+        return None
+
     hermes_home = get_hermes_home()
     cache_file = hermes_home / ".update_check"
     embedded_rev = os.environ.get("HERMES_REVISION") or None
@@ -358,6 +377,9 @@ _update_check_done = threading.Event()
 
 def prefetch_update_check():
     """Kick off update check in a background daemon thread."""
+    if not _update_check_enabled():
+        _update_check_done.set()
+        return
     def _run():
         global _update_result
         _update_result = check_for_updates()
